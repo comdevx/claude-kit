@@ -1,0 +1,174 @@
+# claude-kit installer for Windows PowerShell (self-extracting, version __KIT_VERSION__).
+#
+#   powershell -ExecutionPolicy Bypass -File install.ps1 [options]
+#   irm <url>/install.ps1 | iex
+#
+# Options are passed unchanged to the bash installer (run with --help to list them).
+# --yes also accepts the winget installs of Git for Windows and jq without asking.
+# --dry-run never installs anything: missing prerequisites are reported and the run stops.
+#
+# Claude Code runs hook commands through Git Bash when Git for Windows is installed and through
+# PowerShell otherwise. The kit hooks are bash scripts, so this installer refuses to finish without
+# Git Bash. The install logic itself lives once, in installer/setup-core.sh, run through Git Bash.
+#
+# The whole kit is embedded below the marker line as a base64 zip. Its SHA-256 was recorded at
+# build time and is checked BEFORE anything is extracted. That detects a corrupted or truncated
+# download; it cannot vouch for the release itself, so verify install.ps1 against the SHA256SUMS
+# file from the release page over HTTPS.
+#
+# Everything runs inside one script block, so `irm | iex` leaves no functions or variables behind,
+# and the caller's $ErrorActionPreference, environment variables and PATH are restored or only
+# appended to.
+
+& {
+# Exit (and so set the process exit code) only when running as this script file. Under `irm | iex`
+# there is no script file - and inside a caller's script, $PSCommandPath would be the CALLER's - so
+# then we only set $LASTEXITCODE and return, leaving the caller running.
+$kitSelf = $MyInvocation.ScriptName
+$kitIsFile = $false
+if ($kitSelf -and (Test-Path -LiteralPath $kitSelf)) {
+  $kitIsFile = [bool](Select-String -LiteralPath $kitSelf -SimpleMatch -Quiet -Pattern '__CLAUDE_KIT_PAYLOAD_BELOW__')
+}
+$kitOldEap = $ErrorActionPreference
+$ErrorActionPreference = 'Stop'
+$KitVersion = '__KIT_VERSION__'
+$KitPayloadSha256 = '__PAYLOAD_SHA256__'
+$KitArgs = @($args)
+
+function Write-Kit([string]$Message) { Write-Host "claude-kit: $Message" }
+
+function Test-KitYes { return ($KitArgs -contains '--yes') -or ($KitArgs -contains '-y') }
+function Test-KitDryRun { return ($KitArgs -contains '--dry-run') -or ($KitArgs -contains '-n') }
+
+function Read-KitConfirm([string]$Question) {
+  if (Test-KitYes) { Write-Kit "$Question yes (--yes)"; return $true }
+  try { $a = Read-Host "$Question [y/N]" } catch { return $false }
+  return ($a -match '^(y|yes)$')
+}
+
+# Append (never replace) the machine/user PATH entries and the winget links dir that a fresh
+# winget install adds, so the current session can find the new tools.
+function Add-KitPath {
+  $have = @($env:Path -split ';' | Where-Object { $_ })
+  $extra = @()
+  foreach ($scope in 'Machine', 'User') {
+    $v = [Environment]::GetEnvironmentVariable('Path', $scope)
+    if ($v) { $extra += ($v -split ';' | Where-Object { $_ }) }
+  }
+  if ($env:LOCALAPPDATA) { $extra += (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links') }
+  foreach ($e in $extra) { if ($have -notcontains $e) { $env:Path = $env:Path.TrimEnd(';') + ';' + $e; $have += $e } }
+}
+
+function Find-KitGitBash {
+  $candidates = @()
+  $git = Get-Command git.exe -ErrorAction SilentlyContinue
+  if ($git) {
+    $dir = Split-Path $git.Source -Parent
+    for ($i = 0; $i -lt 3 -and $dir; $i++) {
+      $candidates += (Join-Path $dir 'bin\bash.exe')
+      $dir = Split-Path $dir -Parent
+    }
+  }
+  foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs' }))) {
+    if ($base) { $candidates += (Join-Path $base 'Git\bin\bash.exe') }
+  }
+  foreach ($c in $candidates) {
+    # Never pick C:\Windows\System32\bash.exe: that is WSL, not Git Bash.
+    if ($c -and ($c -notmatch '\\System32\\') -and (Test-Path -LiteralPath $c)) { return $c }
+  }
+  return $null
+}
+
+function Test-KitJq([string]$Bash) {
+  if (Get-Command jq -ErrorAction SilentlyContinue) { return $true }
+  if ($Bash) {
+    & $Bash -lc 'command -v jq >/dev/null 2>&1' | Out-Null
+    if ($LASTEXITCODE -eq 0) { return $true }
+  }
+  return $false
+}
+
+function Invoke-KitWinget([string]$Id, [string]$What) {
+  if (Test-KitDryRun) {
+    Write-Kit "dry run: would offer to install $What (winget install --id $Id -e); nothing is installed in a dry run."
+    return $false
+  }
+  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    Write-Kit "winget is not available. Install $What yourself, then run this installer again."
+    return $false
+  }
+  if (-not (Read-KitConfirm "Install $What now with: winget install --id $Id -e ?")) { return $false }
+  & winget install --id $Id -e --accept-source-agreements --accept-package-agreements | Out-Host
+  Add-KitPath
+  return $true
+}
+
+function Invoke-KitMain {
+  # 1. verify and extract the payload (nothing is changed before this succeeds)
+  $bytes = [Convert]::FromBase64String($KitPayloadB64)
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $hash = ([BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '').ToLowerInvariant()
+  if ($hash -ne $KitPayloadSha256) {
+    Write-Kit "payload checksum mismatch (expected $KitPayloadSha256, got $hash): the file is corrupted or truncated. Download it again and check it against SHA256SUMS from the release page. Nothing was changed."
+    return 3
+  }
+
+  # 2. prerequisites: Git for Windows (Git Bash) and jq
+  $bash = Find-KitGitBash
+  if (-not $bash) {
+    Write-Kit 'Git for Windows (Git Bash) is required: Claude Code runs hook commands through Git Bash, and without it the hooks would run in PowerShell, where the kit''s bash hooks cannot work.'
+    if (Invoke-KitWinget 'Git.Git' 'Git for Windows') { $bash = Find-KitGitBash }
+  }
+  if (-not $bash) {
+    Write-Kit 'Git Bash not found. Install Git for Windows (winget install --id Git.Git -e, or https://git-scm.com/download/win) and run this installer again. Nothing was changed.'
+    return 4
+  }
+  if (-not (Test-KitJq $bash)) {
+    Write-Kit 'jq is required by the kit installer and hooks.'
+    [void](Invoke-KitWinget 'jqlang.jq' 'jq')
+    if (-not (Test-KitJq $bash)) {
+      Write-Kit 'jq not found. Install it (winget install --id jqlang.jq -e), open a new terminal and run this installer again. Nothing was changed.'
+      return 3
+    }
+  }
+
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ('claude-kit-' + [Guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $tmp | Out-Null
+  $oldPayloadDir = $env:CLAUDE_KIT_PAYLOAD_DIR
+  $oldVersion = $env:CLAUDE_KIT_VERSION
+  try {
+    $zip = Join-Path $tmp 'payload.zip'
+    [IO.File]::WriteAllBytes($zip, $bytes)
+    $payload = Join-Path $tmp 'p'
+    Expand-Archive -LiteralPath $zip -DestinationPath $payload -Force
+    # 3. run the shared bash installer through Git Bash, passing every argument through
+    $core = (Join-Path $payload 'installer\setup-core.sh') -replace '\\', '/'
+    $env:CLAUDE_KIT_PAYLOAD_DIR = $payload -replace '\\', '/'
+    $env:CLAUDE_KIT_VERSION = $KitVersion
+    # Out-Host keeps the bash output on screen instead of in this function's return value.
+    & $bash $core @KitArgs | Out-Host
+    return $LASTEXITCODE
+  } finally {
+    if ($null -eq $oldPayloadDir) { Remove-Item Env:CLAUDE_KIT_PAYLOAD_DIR -ErrorAction SilentlyContinue } else { $env:CLAUDE_KIT_PAYLOAD_DIR = $oldPayloadDir }
+    if ($null -eq $oldVersion) { Remove-Item Env:CLAUDE_KIT_VERSION -ErrorAction SilentlyContinue } else { $env:CLAUDE_KIT_VERSION = $oldVersion }
+    Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
+# __CLAUDE_KIT_PAYLOAD_BELOW__
+$KitPayloadB64 = @'
+__PAYLOAD_B64__
+'@
+
+$kitCode = 1
+try {
+  $kitCode = [int](Invoke-KitMain | Select-Object -Last 1)
+} catch {
+  Write-Kit "installer error: $_"
+} finally {
+  $ErrorActionPreference = $kitOldEap
+}
+if ($kitIsFile) { exit $kitCode }
+$global:LASTEXITCODE = $kitCode
+if ($kitCode -ne 0) { Write-Kit "installer failed (exit $kitCode)" }
+} @args

@@ -1,0 +1,11 @@
+# Scripts must keep LF line endings on every OS (a CRLF checkout breaks bash on Windows).
+# PowerShell reads LF files fine, so .ps1 stays LF too.
+* text=auto eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.tmpl text eol=lf
+*.ps1 text eol=lf
+*.yml text eol=lf
+bin/claude-kit text eol=lf
+*.png binary

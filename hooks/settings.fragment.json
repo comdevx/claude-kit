@@ -1,0 +1,44 @@
+{
+  "SessionStart": [
+    {
+      "matcher": "startup|resume|clear|compact",
+      "hooks": [
+        { "type": "command", "command": "bash \"__KIT_HOME__/hooks/session-start.sh\" discipline", "timeout": 10 },
+        { "type": "command", "command": "bash \"__KIT_HOME__/hooks/session-start.sh\" code", "timeout": 10 },
+        { "type": "command", "command": "bash \"__KIT_HOME__/hooks/session-start.sh\" platform", "timeout": 10 },
+        { "type": "command", "command": "bash \"__KIT_HOME__/hooks/lessons-index.sh\"", "timeout": 10 },
+        { "type": "command", "command": "bash \"__KIT_HOME__/hooks/task-status.sh\"", "timeout": 10 }
+      ]
+    }
+  ],
+  "PreToolUse": [
+    {
+      "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+      "hooks": [
+        { "type": "command", "command": "bash \"__KIT_HOME__/hooks/code-detect.sh\" pretool", "timeout": 10 }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": "Agent|Task",
+      "hooks": [
+        { "type": "command", "command": "bash \"__KIT_HOME__/hooks/code-detect.sh\" posttool", "timeout": 10 }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        { "type": "command", "command": "bash \"__KIT_HOME__/hooks/code-detect.sh\" prompt", "timeout": 10 }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        { "type": "command", "command": "bash \"__KIT_HOME__/hooks/stop-gate.sh\"", "timeout": 180 }
+      ]
+    }
+  ]
+}

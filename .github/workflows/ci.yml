@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Windows git would check scripts out with CRLF line endings, which breaks bash scripts.
+      - name: Keep LF line endings
+        shell: bash
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - name: Ensure jq (Linux)
+        if: runner.os == 'Linux'
+        run: command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
+
+      - name: Ensure jq (macOS)
+        if: runner.os == 'macOS'
+        run: command -v jq >/dev/null || brew install jq
+
+      - name: Ensure jq (Windows)
+        if: runner.os == 'Windows'
+        run: command -v jq >/dev/null || choco install jq -y --no-progress
+
+      # build-release.sh needs zip or Python 3 for install.ps1; Git Bash on windows-latest has no zip.
+      - name: Ensure Python 3 (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Show tool versions
+        run: |
+          bash --version | head -1
+          jq --version
+          uname -s
+
+      - name: Unit and installer tests
+        run: bash tests/run.sh
+
+      # macOS ships bash 3.2 as /bin/bash; the hooks must work there too.
+      - name: Unit and installer tests under /bin/bash 3.2
+        if: runner.os == 'macOS'
+        run: /bin/bash tests/run.sh
+
+  windows-installer:
+    name: built installer (windows, ${{ matrix.ps }})
+    runs-on: windows-latest
+    needs: suite
+    strategy:
+      fail-fast: false
+      matrix:
+        ps: [pwsh, powershell]
+        mode: [independent, shared]
+    steps:
+      # Windows git would check scripts out with CRLF line endings, which breaks bash scripts.
+      - name: Keep LF line endings
+        shell: bash
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - name: Ensure jq
+        shell: bash
+        run: command -v jq >/dev/null || choco install jq -y --no-progress
+
+      # build-release.sh needs zip or Python 3 (Git Bash on windows-latest has no zip)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Build dist/ from the working tree
+        shell: bash
+        run: bash build-release.sh --worktree
+
+      - name: Install, run a hook, doctor, uninstall (${{ matrix.mode }})
+        # Shared mode runs with CLAUDE_KIT_FORCE_NO_SYMLINK=1, which exercises the Windows
+        # junction / @import fallback used when Developer Mode is off.
+        shell: ${{ matrix.ps }}
+        run: ./tests/ci-windows-e2e.ps1 -Mode ${{ matrix.mode }}

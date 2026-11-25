@@ -1,0 +1,59 @@
+#!/bin/sh
+# claude-kit installer (self-extracting, version __KIT_VERSION__) for macOS, Linux and Git Bash on Windows.
+#
+#   bash install.sh [options]                         run `bash install.sh --help` for the options
+#   curl -fsSL <url>/install.sh | bash                menu on the terminal
+#   curl -fsSL <url>/install.sh | bash -s -- --all    non-interactive
+#
+# The whole kit is embedded below the marker line as a base64 tar.gz. Its SHA-256 was recorded at
+# build time and is checked BEFORE anything is extracted, so a corrupted or truncated download is
+# refused. This detects damage, not a malicious release: to check the origin, compare this file
+# with SHA256SUMS downloaded from the release page over HTTPS.
+KIT_VERSION="__KIT_VERSION__"
+KIT_PAYLOAD_SHA256="__PAYLOAD_SHA256__"
+KIT_MARKER="__CLAUDE_KIT_PAYLOAD_BELOW__"
+
+kit_die() { printf 'claude-kit: error: %s\n' "$*" >&2; exit "${KIT_RC:-1}"; }
+
+kit_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 "$1" | awk '{print $NF}'
+  else return 1; fi
+}
+
+kit_b64d() { # in out
+  base64 -d < "$1" > "$2" 2>/dev/null && return 0
+  base64 -D < "$1" > "$2" 2>/dev/null && return 0
+  openssl base64 -d < "$1" > "$2" 2>/dev/null && return 0
+  return 1
+}
+
+kit_main() {
+  kit_tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-kit.XXXXXX") || kit_die "cannot create a temp dir"
+  trap 'rm -rf "$kit_tmp"' EXIT
+  trap 'rm -rf "$kit_tmp"; exit 130' INT TERM
+  if [ -f "$0" ] && grep -q "^$KIT_MARKER\$" "$0" 2>/dev/null; then
+    awk -v m="$KIT_MARKER" 'f { print } $0 == m { f = 1 }' "$0" > "$kit_tmp/payload.b64"
+  elif [ ! -t 0 ]; then
+    # Piped (curl ... | bash): the shell has read the script only up to the line that called us,
+    # so the rest of stdin is the marker line followed by the payload.
+    cat > "$kit_tmp/rest"
+    awk -v m="$KIT_MARKER" 'f { print } $0 == m { f = 1 }' "$kit_tmp/rest" > "$kit_tmp/payload.b64"
+  fi
+  if [ ! -s "$kit_tmp/payload.b64" ]; then
+    [ -n "${BASH_VERSION:-}" ] || kit_die "embedded payload not found: this shell reads piped scripts ahead. Pipe into bash instead (curl -fsSL <url>/install.sh | bash), or download install.sh and run: bash install.sh. Nothing was changed."
+    kit_die "embedded payload not found. Download install.sh and run: bash install.sh. Nothing was changed."
+  fi
+  kit_b64d "$kit_tmp/payload.b64" "$kit_tmp/payload.tar.gz" || KIT_RC=3 kit_die "the embedded payload is corrupt (base64 decode failed). Download install.sh again; nothing was changed."
+  kit_got=$(kit_sha256 "$kit_tmp/payload.tar.gz") || kit_die "no SHA-256 tool found (sha256sum, shasum or openssl)"
+  if [ "$kit_got" != "$KIT_PAYLOAD_SHA256" ]; then
+    KIT_RC=3 kit_die "payload checksum mismatch (expected $KIT_PAYLOAD_SHA256, got $kit_got). The file is corrupted or truncated; download it again and compare it with SHA256SUMS from the release page. Nothing was changed."
+  fi
+  mkdir "$kit_tmp/p" || kit_die "cannot create a temp dir"
+  (cd "$kit_tmp/p" && gzip -dc ../payload.tar.gz | tar -xf -) || kit_die "cannot extract the payload"
+  command -v bash >/dev/null 2>&1 || kit_die "bash is required"
+  CLAUDE_KIT_PAYLOAD_DIR="$kit_tmp/p" CLAUDE_KIT_VERSION="$KIT_VERSION" bash "$kit_tmp/p/installer/setup-core.sh" "$@"
+}
+kit_main "$@"; exit $?
+__CLAUDE_KIT_PAYLOAD_BELOW__

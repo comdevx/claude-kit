@@ -1,0 +1,117 @@
+#!/bin/bash
+# claude-kit CLI: status | profiles | update | doctor | uninstall | version
+# Installed into the kit home (default ~/.claude-kit/bin). Bash 3.2 compatible.
+
+# The GitHub repo releases are downloaded from. Replaced at publish time (build-release.sh --repo).
+KIT_GITHUB_REPO="<owner>/claude-kit"
+
+die() { printf 'claude-kit: error: %s\n' "$*" >&2; exit "${2:-1}"; }
+
+# Resolve the kit home from this script's real location (it may be called through a symlink).
+self="${BASH_SOURCE[0]}"; n=0
+while [ -L "$self" ] && [ "$n" -lt 40 ]; do
+  t=$(readlink "$self"); case "$t" in /*) self="$t" ;; *) self="$(dirname "$self")/$t" ;; esac; n=$((n + 1))
+done
+KH="${CLAUDE_KIT_CLI_KIT_HOME:-$(cd "$(dirname "$self")/.." 2>/dev/null && pwd)}"
+CORE="$KH/installer/setup-core.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: claude-kit <command> [options]
+
+  status              installed version, kit home, profiles and mode
+  profiles [opts]     detect profiles again and (re)configure them; --list only prints them
+                      (accepts the installer options: --profile, --all, --mode, --primary, --share, --dry-run, --yes)
+  update [opts]       download the latest release, verify its SHA-256 and re-run it with the recorded choices
+                      (release URL: $CLAUDE_KIT_RELEASE_URL or the project's GitHub releases)
+  doctor              check prerequisites, hook paths, shared links, rule sizes and CLAUDE.md blocks
+  uninstall [--yes]   remove everything the kit created (offers to restore the backups it made)
+  version             print the installed version
+EOF
+}
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else openssl dgst -sha256 "$1" | awk '{print $NF}'; fi
+}
+
+fetch() { # url dest
+  if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
+  elif command -v wget >/dev/null 2>&1; then wget -q -O "$2" "$1"
+  else die "curl or wget is required for update"; fi
+}
+
+# Run from a temp copy so the kit home can be replaced/removed while we run (needed on Windows).
+from_temp() {
+  [ -n "${CLAUDE_KIT_CLI_TEMP:-}" ] && return 0
+  local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-kit-cli.XXXXXX") || die "cannot create a temp dir"
+  cp "$self" "$tmp/claude-kit" && cp "$CORE" "$tmp/setup-core.sh" || die "kit home is incomplete: $KH"
+  CLAUDE_KIT_CLI_TEMP="$tmp" CLAUDE_KIT_CLI_KIT_HOME="$KH" bash "$tmp/claude-kit" "$@"
+  local rc=$?
+  rm -rf "$tmp"
+  exit "$rc"
+}
+
+[ -f "$CORE" ] || [ -n "${CLAUDE_KIT_CLI_TEMP:-}" ] || die "kit home not found or incomplete ($KH)"
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  status) exec bash "$CORE" --status --kit-home "$KH" "$@" ;;
+  doctor) exec env CLAUDE_KIT_PAYLOAD_DIR="$KH" bash "$CORE" --doctor --kit-home "$KH" "$@" ;;
+  profiles)
+    case "${1:-}" in --list) shift; exec bash "$CORE" --list-profiles --kit-home "$KH" "$@" ;; esac
+    exec env CLAUDE_KIT_PAYLOAD_DIR="$KH" bash "$CORE" --kit-home "$KH" "$@" ;;
+  uninstall)
+    from_temp uninstall "$@"
+    exec env CLAUDE_KIT_PAYLOAD_DIR="$KH" bash "$CLAUDE_KIT_CLI_TEMP/setup-core.sh" --uninstall --kit-home "$KH" "$@" ;;
+  update)
+    from_temp update "$@"
+    command -v jq >/dev/null 2>&1 || die "jq is required"
+    m="$KH/state/install.json"
+    [ -f "$m" ] || die "no install manifest at $m; run the installer instead"
+    url="${CLAUDE_KIT_RELEASE_URL:-https://github.com/$KIT_GITHUB_REPO/releases/latest/download}"
+    case "$url" in *"<owner>"*) die "the release URL is not configured in this build; set CLAUDE_KIT_RELEASE_URL" ;; esac
+    url="${url%/}"
+    dl=$(mktemp -d "${TMPDIR:-/tmp}/claude-kit-update.XXXXXX") || die "cannot create a temp dir"
+    trap 'rm -rf "$dl"' EXIT
+    echo "claude-kit: downloading $url/install.sh"
+    fetch "$url/install.sh" "$dl/install.sh" || die "download failed: $url/install.sh"
+    fetch "$url/SHA256SUMS" "$dl/SHA256SUMS" || die "download failed: $url/SHA256SUMS"
+    want=$(awk '$2 == "install.sh" || $2 == "*install.sh" { print $1; exit }' "$dl/SHA256SUMS")
+    got=$(sha256_of "$dl/install.sh")
+    [ -n "$want" ] || die "SHA256SUMS has no entry for install.sh; refusing to run the download"
+    [ "$want" = "$got" ] || die "checksum mismatch for install.sh (expected $want, got $got); refusing to run the download"
+    echo "claude-kit: checksum verified ($got)"
+    # A recorded profile that is missing right now (deleted, renamed, an unmounted disk) is skipped for
+    # this run only. It stays in the manifest, so uninstall still cleans it if it comes back. The CLI
+    # never writes the manifest itself; only the installer run does.
+    kept=0
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      if [ -d "$p" ]; then set -- "$@" --profile "$p"; kept=$((kept + 1))
+      else echo "claude-kit: warning: profile $p does not exist right now; skipping it for this update (it stays recorded)" >&2; fi
+    done <<EOF
+$(jq -r '.profiles[]' "$m")
+EOF
+    [ "$kept" -gt 0 ] || die "none of the recorded profiles exist right now; nothing to update"
+    mode=$(jq -r '.mode // "independent"' "$m")
+    pr=$(jq -r '.primary // ""' "$m")
+    if [ "$mode" = shared ] && [ -n "$pr" ] && [ ! -d "$pr" ]; then die "the Shared-mode primary $pr does not exist right now; nothing to update"; fi
+    set -- "$@" --mode "$mode"
+    # replay the recorded isolation choices (never fall back to ~/.cursor or ~/.local/bin by surprise)
+    [ "$(jq -r '.no_cursor // false' "$m")" = true ] && set -- "$@" --no-cursor
+    cdir=$(jq -r '.cursor_dir // ""' "$m"); [ -n "$cdir" ] && [ "$(jq -r '.no_cursor // false' "$m")" != true ] && set -- "$@" --cursor-dir "$cdir"
+    [ "$(jq -r '.no_cli // false' "$m")" = true ] && set -- "$@" --no-cli
+    bdir=$(jq -r '.bin_dir // ""' "$m"); [ -n "$bdir" ] && [ "$(jq -r '.no_cli // false' "$m")" != true ] && set -- "$@" --bin-dir "$bdir"
+    if [ "$mode" = shared ]; then
+      [ -n "$pr" ] && set -- "$@" --primary "$pr"
+      sh=$(jq -r '.share // ""' "$m"); [ -n "$sh" ] && set -- "$@" --share "$sh"
+    fi
+    # the recorded choices win: isolation settings leaked from the environment are ignored
+    unset CLAUDE_KIT_CURSOR_DIR CLAUDE_KIT_BIN_DIR CLAUDE_KIT_NO_CURSOR CLAUDE_KIT_NO_CLI
+    bash "$dl/install.sh" --kit-home "$KH" --yes "$@"
+    exit $? ;;
+  version|--version) cat "$KH/VERSION" 2>/dev/null || echo unknown ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac

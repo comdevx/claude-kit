@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "bash \"__KIT_HOME__/cursor/hooks/session-context.sh\"", "timeout": 10 }
+    ],
+    "afterFileEdit": [
+      { "command": "bash \"__KIT_HOME__/cursor/hooks/record-edit.sh\"", "timeout": 10 }
+    ],
+    "afterShellExecution": [
+      { "command": "bash \"__KIT_HOME__/cursor/hooks/record-shell.sh\"", "timeout": 10 }
+    ],
+    "stop": [
+      { "command": "bash \"__KIT_HOME__/cursor/hooks/stop-gate.sh\"", "timeout": 180, "loop_limit": 2 }
+    ]
+  }
+}
