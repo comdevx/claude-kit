@@ -2,7 +2,7 @@
 /**
  * fidelity-lib.test.cjs
  * Unit tests for fidelity-lib.cjs
- * Run: node --test <skill-dir>/scripts/
+ * Run: node --test <skill-dir>/scripts/*.test.cjs
  */
 
 const { test, describe } = require('node:test');

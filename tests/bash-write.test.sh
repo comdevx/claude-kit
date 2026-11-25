@@ -104,12 +104,58 @@ done <<EOF2
 $TABLE
 EOF2
 
-# a 40 KB word without a slash must classify in well under a second (no quadratic basename)
+# Huge single words. Two separate questions, neither tied to absolute machine speed:
+# (a) HANG: a generous watchdog (Windows Git Bash starts processes slowly; a real hang never ends).
 big=$(head -c 40000 /dev/zero | tr '\0' 'a')
-with_timeout 1 kit_bash_source_write "echo $big > out.txt"
-[ "$WD_RC" != 124 ] && pass "4: a 40 KB word classifies in under 1 s" || fail "4: 40 KB word" "killed after 1 s"
-with_timeout 1 kit_bash_source_write "echo hi > $big.ts"
-[ "$WD_RC" != 124 ] && pass "4: a 40 KB target name classifies in under 1 s" || fail "4: 40 KB target" "killed after 1 s"
+with_timeout 15 kit_bash_source_write "echo $big > out.txt"
+[ "$WD_RC" != 124 ] && pass "4: a 40 KB word terminates (no hang)" || fail "4: 40 KB word" "hung: killed after 15 s"
+HUNG=$WD_RC
+with_timeout 15 kit_bash_source_write "echo hi > $big.ts"
+[ "$WD_RC" != 124 ] && pass "4: a 40 KB target name terminates (no hang)" || fail "4: 40 KB target" "hung: killed after 15 s"
+[ "$WD_RC" = 124 ] && HUNG=124
+
+# (b) SCALING: the tokenizer and the path check must stay near-linear. Time a 5 KB and an 80 KB word (best of 5 each, which
+# cuts scheduler noise) and compare the ratio for 16x the input: linear is <= ~16x (less, because process
+# start is a fixed cost; macOS awk string append adds a bit, measured ~40x), quadratic ~140x. The limit
+# sits between them, so a slow or loaded machine scales both sizes alike.
+now_ms() {
+  if [ -n "${EPOCHREALTIME:-}" ]; then local t=${EPOCHREALTIME/[.,]/}; printf '%s' "$((t / 1000))"; return; fi
+  perl -MTime::HiRes=time -e 'printf "%d", time()*1000' 2>/dev/null && return
+  python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null && return
+  date +%s%3N 2>/dev/null
+}
+best_ms() {   # best_ms <command> -> fastest of 5 runs, in ms
+  local i s e best=
+  for i in 1 2 3 4 5; do
+    s=$(now_ms); kit_bash_source_write "$1" > /dev/null; e=$(( $(now_ms) - s ))
+    if [ -z "$best" ] || [ "$e" -lt "$best" ]; then best=$e; fi
+  done
+  printf '%s' "$best"
+}
+SCALE_LIMIT=80   # ratio of the 80 KB time to the 5 KB time that FAILS (measured: linear-ish ~40x on macOS awk, quadratic ~140x)
+if [ "$HUNG" = 124 ]; then
+  fail "4: scaling" "skipped, the classifier hung above"
+elif ! case "$(now_ms)" in ''|*[!0-9]*) false ;; esac; then
+  pass "4: scaling check skipped (no millisecond clock: need bash 5, perl, python3 or GNU date)"
+else
+  big80=$(head -c 80000 /dev/zero | tr '\0' 'a')
+  small=$(head -c 5000 /dev/zero | tr '\0' 'a')
+  # a long word (awk tokenizer) and a long redirect target (bash kit_is_source_path: ${x##*/} is quadratic)
+  for kind in word target; do
+    if [ "$kind" = word ]; then c_small="echo $small > out.txt"; c_big="echo $big80 > out.txt"
+    else c_small="echo hi > $small.ts"; c_big="echo hi > $big80.ts"; fi
+    t_small=$(best_ms "$c_small"); t_big=$(best_ms "$c_big")
+    [ "$t_small" -ge 1 ] || t_small=1
+    ratio=$(( t_big * 10 / t_small ))   # tenths: 45 = 4.5x
+    [ "$ratio" -lt $((SCALE_LIMIT * 10)) ] && pass "4: $kind: classifier time scales near-linearly (5 KB ${t_small} ms, 80 KB ${t_big} ms, ratio $((ratio / 10)).$((ratio % 10))x < ${SCALE_LIMIT}x)" \
+      || fail "4: $kind: classifier scaling" "5 KB ${t_small} ms, 80 KB ${t_big} ms, ratio $((ratio / 10)).$((ratio % 10))x >= ${SCALE_LIMIT}x (quadratic?)"
+  done
+fi
+
+# a target longer than PATH_MAX (4096 bytes) cannot be a real file: not a source path, decided up front
+p4k=$(head -c 4000 /dev/zero | tr '\0' 'a')
+kit_is_source_path "$p4k.ts" && pass "4: a 4003-byte .ts path is still a source path" || fail "4: 4003-byte path" "rejected"
+kit_is_source_path "$p4k$p4k.ts" && fail "4: a 8003-byte .ts path" "accepted as source" || pass "4: a path over 4096 bytes is not a source path"
 
 # 4: a 400 KB double-quoted command must not approach the 10 s PreToolUse timeout
 big4=$(head -c 400000 /dev/zero | tr '\0' 'x')

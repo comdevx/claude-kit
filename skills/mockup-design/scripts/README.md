@@ -168,5 +168,5 @@ module.exports = {
 ## Running unit tests
 
 ```sh
-node --test <skill-dir>/scripts/fidelity-lib.test.cjs   # 41 specs (the bare-directory form does not resolve on node 26)
+NODE_PATH="$(npm root -g)" node --test <skill-dir>/scripts/*.test.cjs   # 43 specs (fidelity-lib 41 + mockup-diff.timeout 2; the bare-directory form does not resolve on node 26)
 ```

@@ -114,4 +114,4 @@ but keep `spec/` + `map.json` if the project wants regression protection
 
 ---
 
-Scripts, contracts, exit codes: `scripts/README.md`. Unit tests: `NODE_PATH="$(npm root -g)" node --test <skill-dir>/scripts/` (fidelity-lib 41 specs + mockup-diff.timeout: mockup-diff must not inherit an adapter's short page default timeout — it sets its own after `open()` and detects absent keys with `count()`, so adapters need no tiny default).
+Scripts, contracts, exit codes: `scripts/README.md`. Unit tests: `NODE_PATH="$(npm root -g)" node --test <skill-dir>/scripts/*.test.cjs` (fidelity-lib 41 specs + mockup-diff.timeout: mockup-diff must not inherit an adapter's short page default timeout — it sets its own after `open()` and detects absent keys with `count()`, so adapters need no tiny default).

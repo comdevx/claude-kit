@@ -163,6 +163,9 @@ kit_prune() {
 # kit_is_source_path <path> -> 0 when the extension is a source-code one
 kit_is_source_path() {
   local base ext
+  # no real path is longer than 4096 bytes (PATH_MAX); decide before any pattern expansion, because
+  # ${var##*/} is quadratic in bash on a very long word and the hooks have a 10 s timeout
+  [ "$(kit_byte_len "$1")" -le 4096 ] || return 1
   base="${1##*/}"
   case "$base" in *.*) ;; *) return 1 ;; esac
   ext=$(printf '%s' "${base##*.}" | tr '[:upper:]' '[:lower:]')

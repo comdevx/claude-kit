@@ -5,7 +5,7 @@
  * mockup-diff flaky. Before the fix the live screenshot / evaluate inherited that default and timed out under load
  * ("locator.screenshot: Timeout 289ms exceeded" in a real project gate). Here the adapter sets 1 ms: the run must
  * still exit 0 on an identical page, and a mapped key that is absent from the page must be reported as missing.
- * Run: NODE_PATH="$(npm root -g)" node --test <skill-dir>/scripts/
+ * Run: NODE_PATH="$(npm root -g)" node --test <skill-dir>/scripts/*.test.cjs
  * Browser rules: installed Chrome, muted, local-network permission, closed in finally (via the adapter's close()).
  */
 const { test } = require('node:test');
