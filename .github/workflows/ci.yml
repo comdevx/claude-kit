@@ -60,7 +60,7 @@ jobs:
         run: /bin/bash tests/run.sh
 
   windows-installer:
-    name: built installer (windows, ${{ matrix.ps }})
+    name: built installer (windows, ${{ matrix.ps }}, ${{ matrix.mode }})
     runs-on: windows-latest
     needs: suite
     strategy:
@@ -89,8 +89,15 @@ jobs:
         shell: bash
         run: bash build-release.sh --worktree
 
-      - name: Install, run a hook, doctor, uninstall (${{ matrix.mode }})
-        # Shared mode runs with CLAUDE_KIT_FORCE_NO_SYMLINK=1, which exercises the Windows
-        # junction / @import fallback used when Developer Mode is off.
-        shell: ${{ matrix.ps }}
+      # Shared mode runs with CLAUDE_KIT_FORCE_NO_SYMLINK=1, which exercises the Windows
+      # junction / @import fallback used when Developer Mode is off.
+      # `shell:` does not accept expressions, so each PowerShell flavour gets its own step.
+      - name: Install, run a hook, doctor, uninstall (${{ matrix.mode }}, pwsh)
+        if: matrix.ps == 'pwsh'
+        shell: pwsh
+        run: ./tests/ci-windows-e2e.ps1 -Mode ${{ matrix.mode }}
+
+      - name: Install, run a hook, doctor, uninstall (${{ matrix.mode }}, Windows PowerShell)
+        if: matrix.ps == 'powershell'
+        shell: powershell
         run: ./tests/ci-windows-e2e.ps1 -Mode ${{ matrix.mode }}
