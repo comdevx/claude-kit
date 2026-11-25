@@ -1,7 +1,8 @@
 # Shared test helpers (sourced by *.test.sh). Bash 3.2 compatible.
 REPO="${KIT_TEST_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BASH_BIN="${BASH:-/bin/bash}"
-REAL_JQ="$(command -v jq 2>/dev/null)"
+JQ_EXE="$(command -v jq 2>/dev/null)"   # the jq program itself: fixtures put THIS on the product's PATH
+REAL_JQ="$JQ_EXE"                       # jq for the tests' own checks (binary-mode wrapper on Windows, below)
 PASSES=0; FAILS=0
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/kit-test.XXXXXX")
@@ -40,6 +41,38 @@ for d in /usr/bin /bin /usr/sbin /sbin; do
     [ -e "$NOJQ_BIN/$n" ] || ln -s "$f" "$NOJQ_BIN/$n" 2>/dev/null
   done
 done
+
+# Git Bash on Windows runs a native jq.exe: it writes CRLF line ends in text mode, and MSYS rewrites
+# path-like arguments (--arg p /tmp/x reaches it as C:/...). Either would corrupt the tests' own
+# checks, so they use a wrapper: binary mode, no rewriting, file operands converted with cygpath.
+# The product never sees this wrapper: fixtures give it $JQ_EXE.
+case "${OSTYPE:-}" in msys*|cygwin*)
+  if [ -n "$JQ_EXE" ] && "$JQ_EXE" -b -n 1 >/dev/null 2>&1; then
+    mkdir -p "$T/check-jq"
+    { printf '#!/bin/bash\nJQ_EXE="%s"\n' "$JQ_EXE"; cat <<'WRAP'
+a=(); f=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --arg|--argjson) a+=("$1" "$2" "$3"); shift 3 ;;
+    --slurpfile|--rawfile) a+=("$1" "$2" "$(cygpath -m -- "$3")"); shift 3 ;;
+    -?*) a+=("$1"); shift ;;
+    *) if [ "$f" = 0 ]; then a+=("$1"); f=1; else case "$1" in /*) a+=("$(cygpath -m -- "$1")") ;; *) a+=("$1") ;; esac; fi; shift ;;
+  esac
+done
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' exec "$JQ_EXE" -b "${a[@]}"
+WRAP
+    } > "$T/check-jq/jq"; chmod +x "$T/check-jq/jq"
+    REAL_JQ="$T/check-jq/jq"
+  fi
+  # Plain `ln -s` in Git Bash silently makes a COPY (and fails for a missing target). Fixtures need
+  # real symlinks, the same kind the installer makes (it sets this MSYS mode itself), when the
+  # system allows them (Developer Mode or an elevated runner).
+  mkdir -p "$T/ln-probe/t"
+  if MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ln -s "$T/ln-probe/t" "$T/ln-probe/l" 2>/dev/null && [ -L "$T/ln-probe/l" ]; then
+    export MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict"
+  fi
+  rm -rf "$T/ln-probe" ;;
+esac
 
 MODES="jq nojq"; [ -n "$REAL_JQ" ] || MODES="nojq"
 

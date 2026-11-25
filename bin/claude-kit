@@ -42,15 +42,23 @@ fetch() { # url dest
   else die "curl or wget is required for update"; fi
 }
 
+# Git Bash on Windows: a native jq.exe writes CRLF line ends in text mode, so `jq -r '.profiles[]'`
+# gave "path<CR>" lines and update treated every recorded profile as missing; jq runs in binary
+# mode (-b; Windows builds >= 1.6) there.
+case "${OSTYPE:-}" in
+  msys*|cygwin*) if command -v jq >/dev/null 2>&1 && command jq -b -n 1 >/dev/null 2>&1; then jq() { command jq -b "$@"; }; fi ;;
+esac
+
 # Run from a temp copy so the kit home can be replaced/removed while we run (needed on Windows).
+# exec: this shell must not stay alive, because bash keeps its script ($KH/bin/claude-kit) open and
+# Windows refuses to rename a directory with an open file in it - the update's kit home swap failed
+# with "Permission denied". A small `bash -c` (no file in the kit home open) waits and cleans up.
 from_temp() {
   [ -n "${CLAUDE_KIT_CLI_TEMP:-}" ] && return 0
   local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-kit-cli.XXXXXX") || die "cannot create a temp dir"
   cp "$self" "$tmp/claude-kit" && cp "$CORE" "$tmp/setup-core.sh" || die "kit home is incomplete: $KH"
-  CLAUDE_KIT_CLI_TEMP="$tmp" CLAUDE_KIT_CLI_KIT_HOME="$KH" bash "$tmp/claude-kit" "$@"
-  local rc=$?
-  rm -rf "$tmp"
-  exit "$rc"
+  exec env CLAUDE_KIT_CLI_TEMP="$tmp" CLAUDE_KIT_CLI_KIT_HOME="$KH" \
+    bash -c 'bash "$1/claude-kit" "${@:2}"; rc=$?; rm -rf "$1"; exit "$rc"' claude-kit "$tmp" "$@"
 }
 
 [ -f "$CORE" ] || [ -n "${CLAUDE_KIT_CLI_TEMP:-}" ] || die "kit home not found or incomplete ($KH)"

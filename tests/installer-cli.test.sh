@@ -55,7 +55,7 @@ REL="$T/release"
 s1=$(cksum < "$H/.claude/settings.json")
 
 cp "$REL/install.sh" "$T/good.sh"; printf 'echo tampered\n' >> "$REL/install.sh"
-XENV="CLAUDE_KIT_RELEASE_URL=file://$REL" run_cli update
+XENV="CLAUDE_KIT_RELEASE_URL=$(file_url "$REL")" run_cli update
 [ "$RC" -ne 0 ] && pass "update with a bad checksum: refused" || fail "update bad checksum refused" "$OUT"
 assert_has "update with a bad checksum: says why" "$OUT" "checksum mismatch"
 assert_eq "update with a bad checksum: version unchanged" "1.0.0-test" "$(cat "$KH/VERSION")"
@@ -63,7 +63,7 @@ cp "$T/good.sh" "$REL/install.sh"
 
 # HOME spelled with a "//" (a TMPDIR ending in "/" does that) while the CLI finds its kit home via pwd:
 # the hook commands must keep the portable $HOME form (regression: they turned absolute on update).
-HOME_ARG="$T//cli home" XENV="CLAUDE_KIT_RELEASE_URL=file://$REL" run_cli update
+HOME_ARG="$T//cli home" XENV="CLAUDE_KIT_RELEASE_URL=$(file_url "$REL")" run_cli update
 assert_eq "update with a good checksum: exit 0" 0 "$RC"
 assert_has "update: checksum verified" "$OUT" "checksum verified"
 assert_eq "update: new version installed" "2.0.0-test" "$(cat "$KH/VERSION")"

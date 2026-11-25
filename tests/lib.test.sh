@@ -38,7 +38,8 @@ for u in MINGW64_NT-10.0 MSYS_NT-10.0 CYGWIN_NT-10.0 Linux Darwin; do
   case "$u" in MINGW*|MSYS*|CYGWIN*) want=windows ;; Linux) want=linux ;; Darwin) want=macos ;; esac
   assert_eq "lib uname $u -> $want" "$want" "$got"
 done
-assert_eq "lib norm_path" 'C:/Proj/x/a.ts' "$("$BASH_BIN" -c '. "$1"; kit_norm_path "$2"' x "$KIT/hooks/lib.sh" 'C:\Proj\x\a.ts')"
+want='C:/Proj/x/a.ts'; command -v cygpath >/dev/null 2>&1 && want='/c/Proj/x/a.ts'   # documented: C:/x -> /c/x when cygpath exists (Git Bash)
+assert_eq "lib norm_path" "$want" "$("$BASH_BIN" -c '. "$1"; kit_norm_path "$2"' x "$KIT/hooks/lib.sh" 'C:\Proj\x\a.ts')"
 # source extension list
 for e in ts tsx js jsx mjs cjs svelte vue py go rs java kt swift c cc cpp h hpp cs php rb sh bash ps1 sql dart scala lua ex exs zig TS; do
   "$BASH_BIN" -c '. "$1"; kit_is_source_path "$2"' x "$KIT/hooks/lib.sh" "/p/f.$e" && pass "ext .$e is source" || fail "ext .$e is source" "not detected"

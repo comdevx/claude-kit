@@ -117,8 +117,11 @@ PYREAL=$(command -v python3 2>/dev/null)
 if [ -n "$PYREAL" ] && "$PYREAL" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' 2>/dev/null; then
   NB="$T/nozip-bin"; mkdir -p "$NB"
   for f in "$NOJQ_BIN"/*; do n="${f##*/}"; case "$n" in zip|python|python3|python3.*) continue ;; esac; ln -s "$f" "$NB/$n" 2>/dev/null; done
-  ln -s "$PYREAL" "$NB/python"
-  out=$(env -i HOME="$T" PATH="$NB" TMPDIR="$T/tmp" "$BASH_BIN" "$REPO/build-release.sh" --worktree --version 0-nozip --out "$T/dist-nozip" 2>&1); rc=$?
+  # a wrapper, not a link: Git Bash copies on `ln -s`, and a copied python.exe cannot find its DLLs
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$PYREAL" > "$NB/python"; chmod +x "$NB/python"
+  # git is outside /usr/bin on Git for Windows (mingw64/bin): keep it reachable, as on any real PATH
+  NBP="$NB"; [ -e "$NB/git" ] || NBP="$NB:$(dirname "$(command -v git)")"
+  out=$(env -i HOME="$T" PATH="$NBP" TMPDIR="$T/tmp" "$BASH_BIN" "$REPO/build-release.sh" --worktree --version 0-nozip --out "$T/dist-nozip" 2>&1); rc=$?
   assert_eq "5: build-release works with no zip and Python 3 named python (exit 0)" 0 "$rc"
   [ -s "$T/dist-nozip/install.ps1" ] && pass "5: install.ps1 built through the python fallback" || fail "5: install.ps1 via python" "$out"
 else

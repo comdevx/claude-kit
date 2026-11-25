@@ -16,7 +16,8 @@ trap 'cleanup_marks; rm -rf "$T"' EXIT
 # PATH without pgrep/pkill (Git for Windows, slim Linux images)
 NP="$T/nopgrep-bin"; mkdir -p "$NP"
 for f in "$NOJQ_BIN"/*; do n="${f##*/}"; case "$n" in pgrep|pkill) continue ;; esac; ln -s "$f" "$NP/$n" 2>/dev/null; done
-[ -n "$REAL_JQ" ] && ln -s "$REAL_JQ" "$NP/jq"
+# a wrapper, not a link: Git Bash copies on `ln -s`, and a copied Chocolatey jq shim cannot find its jq.exe
+[ -n "$JQ_EXE" ] && { printf '#!/bin/sh\nexec "%s" "$@"\n' "$JQ_EXE" > "$NP/jq"; chmod +x "$NP/jq"; }
 
 # ---------------------------------------------------------------- 1. wall-clock deadline
 SLOW="$T/slow-sleep"; mkdir -p "$SLOW"

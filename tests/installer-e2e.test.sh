@@ -164,9 +164,15 @@ assert_eq "piped with flags: installed" "$KIT_N" "$(kit_cmd_count "$H/.claude/se
 if [ -x /bin/dash ]; then
   new_home "dash home"; mkdir -p "$H/.claude"; printf '{}\n' > "$H/.claude/settings.json"; before=$(tree "$H")
   OUT=$(cat "$DIST/install.sh" | (cd "$T" && env -i HOME="$H" PATH="$JQ_PATH" TMPDIR="$T/tmp" CLAUDE_KIT_HOME="$KH" CLAUDE_KIT_TTY=none /bin/dash -s -- --all --yes) 2>&1); RC=$?
-  [ "$RC" -ne 0 ] && pass "piped into dash (reads ahead): refused (rc=$RC)" || fail "piped into dash refused" "rc=0"
-  assert_has "piped into dash: tells the user to pipe into bash" "$OUT" "Pipe into bash instead"
-  assert_tree_same "piped into dash: nothing changed" "$before" "$(tree "$H")"
+  # Does this dash read a piped script ahead? Then `read` below finds nothing left and LINE2 runs as a command.
+  if [ "$(printf 'read l; echo "got:$l"\nLINE2\n' | /bin/dash -s 2>/dev/null)" != "got:LINE2" ]; then
+    [ "$RC" -ne 0 ] && pass "piped into dash (reads ahead): refused (rc=$RC)" || fail "piped into dash refused" "rc=0"
+    assert_has "piped into dash: tells the user to pipe into bash" "$OUT" "Pipe into bash instead"
+    assert_tree_same "piped into dash: nothing changed" "$before" "$(tree "$H")"
+  else   # this dash (Git Bash) reads a pipe line by line, so the payload is still there: it must install
+    assert_eq "piped into dash (no read-ahead here): exit 0" 0 "$RC"
+    assert_eq "piped into dash (no read-ahead here): installed" "$KIT_N" "$(kit_cmd_count "$H/.claude/settings.json" 2>/dev/null)"
+  fi
 fi
 
 # ---------------------------------------------------------------- Cursor wiring + CLI link on PATH
@@ -178,7 +184,8 @@ INST_PATH="$JQ_PATH:$H/.local/bin" run_inst --all --yes
 assert_eq "cursor: exit 0" 0 "$RC"
 assert_eq "cursor: user hook kept" "echo mine" "$("$REAL_JQ" -r '.hooks.stop[0].command' "$H/.cursor/hooks.json")"
 assert_eq "cursor: kit hooks added for 4 events" 4 "$("$REAL_JQ" '[.hooks[][] | select(.command | contains("/.claude-kit/cursor/hooks/"))] | length' "$H/.cursor/hooks.json")"
-assert_has "cursor: absolute kit path substituted" "$(cat "$H/.cursor/hooks.json")" "$KH/cursor/hooks/stop-gate.sh"
+khc="$KH"; case "${OSTYPE:-}" in msys*|cygwin*) khc=$(cygpath -m "$KH") ;; esac   # Cursor on Windows gets C:/... paths
+assert_has "cursor: absolute kit path substituted" "$(cat "$H/.cursor/hooks.json")" "$khc/cursor/hooks/stop-gate.sh"
 assert_eq "CLI linked into ~/.local/bin (on PATH)" "$KH/bin/claude-kit" "$(readlink "$H/.local/bin/claude-kit")"
 c1=$(cksum < "$H/.cursor/hooks.json")
 INST_PATH="$JQ_PATH:$H/.local/bin" run_inst --all --yes

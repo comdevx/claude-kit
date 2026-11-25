@@ -166,7 +166,7 @@ REL="$T/release"; "$BASH_BIN" "$REPO/build-release.sh" --worktree --version 9.9.
 new_home "r10 home"; mkdir -p "$H/.claude" "$H/.claude-old"; printf '{}\n' > "$H/.claude/settings.json"; printf '{}\n' > "$H/.claude-old/settings.json"
 run_inst --all --yes
 rm -rf "$H/.claude-old"
-XENV="CLAUDE_KIT_RELEASE_URL=file://$REL" run_cli update
+XENV="CLAUDE_KIT_RELEASE_URL=$(file_url "$REL")" run_cli update
 assert_eq "#10 update with a deleted profile: exit 0" 0 "$RC"
 [ ! -e "$H/.claude-old" ] && pass "#10 update does not recreate a deleted profile" || fail "#10 not recreated" "$(ls -A "$H/.claude-old")"
 assert_has "#10 update warns about the missing profile" "$OUT" "does not exist right now"

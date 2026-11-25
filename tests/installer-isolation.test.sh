@@ -35,7 +35,7 @@ assert_tree_same "1: env opt-outs: ~/.cursor and ~/.local/bin byte-untouched" "$
 
 # ---------------------------------------------------------------- update replays the recorded opt-outs
 REL="$T/release"; "$BASH_BIN" "$REPO/build-release.sh" --worktree --version 9.9.12-test --out "$REL" > "$T/rel.log" 2>&1 || fail "release build" "$(cat "$T/rel.log")"
-INST_PATH="$JQ_PATH:$H/.local/bin" XENV="CLAUDE_KIT_RELEASE_URL=file://$REL" run_cli update
+INST_PATH="$JQ_PATH:$H/.local/bin" XENV="CLAUDE_KIT_RELEASE_URL=$(file_url "$REL")" run_cli update
 assert_eq "1: update after an isolated install: ok" 0 "$RC"
 assert_tree_same "1: update replays --no-cursor/--no-cli (still untouched)" "$g0" "$(guarded)"
 
@@ -63,14 +63,14 @@ assert_eq "1: uninstall ignores flags and uses install.json (kit hooks removed f
 # ---------------------------------------------------------------- --dry-run shows absolute paths
 real_like_home "iso dry home"
 INST_PATH="$JQ_PATH:$H/.local/bin" run_inst --all --dry-run
-assert_has "1: --dry-run prints the absolute path of the Cursor target next to ~" "$OUT" "$H/dotfiles/cursor-hooks.json"
+assert_has "1: --dry-run prints the absolute path of the Cursor target next to ~" "$OUT" "$(cd "$H/dotfiles" && pwd -P)/cursor-hooks.json"
 assert_has "1: --dry-run prints the absolute path of the CLI link" "$OUT" "$H/.local/bin/claude-kit"
 assert_has "1: README has an isolated-install note" "$(cat "$REPO/README.md")" "--no-cursor"
 
 # ================================================================ round 10
 rec() { "$REAL_JQ" -r "$1" "$KH/state/install.json"; }
 tamper() { "$REAL_JQ" "$1" "$KH/state/install.json" > "$T/m.tmp" && cat "$T/m.tmp" > "$KH/state/install.json"; }
-upd() { INST_PATH="$JQ_PATH:$H/.local/bin" XENV="CLAUDE_KIT_RELEASE_URL=file://$REL ${UPD_ENV:-}" run_cli update; }
+upd() { INST_PATH="$JQ_PATH:$H/.local/bin" XENV="CLAUDE_KIT_RELEASE_URL=$(file_url "$REL") ${UPD_ENV:-}" run_cli update; }
 
 # ---------------------------------------------------------------- 1. update never undoes --no-cli
 for order in "--bin-dir XB --no-cli" "--no-cli --bin-dir XB" "env"; do
@@ -258,9 +258,10 @@ else
   echo "SKIP 1: NFD record test needs a normalization-insensitive file system"
 fi
 real_like_home "r12 bs home"; mkdir -p "$H/bin"
-ln -s "$H/.claude" "$H/a\\b"; ln -s "$H" "$H/c\\d"
+ln -s "$H/.claude" "$H/a\\b" 2>/dev/null; ln -s "$H" "$H/c\\d" 2>/dev/null
 INST_PATH="$JQ_PATH:$H/.local/bin" run_inst --all --yes --no-cursor --no-cli
-for v in "a\\b" "c\\d"; do
+[ -L "$H/a\\b" ] || echo "SKIP 1: backslash records need a file system where \\ is a file-name character (on Windows it is a path separator)"
+[ -L "$H/a\\b" ] && for v in "a\\b" "c\\d"; do
   "$REAL_JQ" --arg d "$H/$v" '.bin_dirs = [$d]' "$KH/state/install.json" > "$T/m.tmp" && cat "$T/m.tmp" > "$KH/state/install.json"; snap=$(tree "$H")
   INST_PATH="$JQ_PATH:$H/.local/bin" run_inst --uninstall --yes
   [ "$RC" -ne 0 ] && pass "1: uninstall refuses a record naming a backslash symlink to $( [ "$v" = "a\\b" ] && echo the profile || echo HOME)" || fail "1: backslash record $v" "rc=0"
@@ -298,7 +299,8 @@ out=$(env -i HOME="$H" PATH="$JQ_PATH" CLAUDE_KIT_LIB_ONLY=1 KHX="$KH" SHIM="$SH
   kit_item_owned "$HOME/l/k1" >/dev/null   # warm-up: per-run setup may use tools once
   : > "$CNT"; PATH="$SHIM:$PATH"; n=0
   for i in 1 2 3 4 5 6 7 8 9 10; do kit_item_owned "$HOME/l/k$i" && n=$((n + 1)); done
-  echo "owned=$n calls=$(wc -l < "$CNT" | tr -d " ")"' _ "$REPO/installer/setup-core.sh" 2>&1)
+  c=$(wc -l < "$CNT")   # read the count BEFORE any other tool runs: a "| tr" here would race the shim and count itself
+  echo "owned=$n calls=$((c))"' _ "$REPO/installer/setup-core.sh" 2>&1)
 assert_eq "3: kit_item_owned: 10 owned links checked with zero tr/sed processes" "owned=10 calls=0" "$out"
 
 # ================================================================ round 13

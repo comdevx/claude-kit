@@ -5,8 +5,11 @@
 [ -n "$REAL_JQ" ] || { echo "SKIP installer tests need jq on the build machine"; exit 0; }
 T=$(cd "$T" && pwd)   # same dir, without the "//" a TMPDIR ending in "/" leaves (the installer normalizes paths)
 mkdir -p "$T/tmp" "$T/jq-bin"
-ln -s "$REAL_JQ" "$T/jq-bin/jq"
+# a wrapper, not a link: Git Bash copies on `ln -s`, and a copied Chocolatey jq shim cannot find its jq.exe
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$JQ_EXE" > "$T/jq-bin/jq"; chmod +x "$T/jq-bin/jq"
 JQ_PATH="$NOJQ_BIN:$T/jq-bin"
+# a real Windows PATH always has the system dir (cmd.exe for junctions, tasklist)
+case "${OSTYPE:-}" in msys*|cygwin*) JQ_PATH="$JQ_PATH:$(cygpath -u "${SYSTEMROOT:-C:\\Windows}")/System32" ;; esac
 DIST="$T/dist"
 TAB=$(printf '\t')
 KIT_N=$("$REAL_JQ" '[.. | objects | select(has("command"))] | length' "$REPO/hooks/settings.fragment.json")   # kit hook commands
@@ -53,6 +56,10 @@ assert_tree_same() { # name before after
   if [ "$2" = "$3" ]; then pass "$1"
   else fail "$1" "trees differ: $(diff <(printf '%s\n' "$2") <(printf '%s\n' "$3") | head -20 | tr '\n' '|')"; fi
 }
+
+# file_url <abs path>: a file:// URL the platform's curl opens (Git Bash ships a native curl, which
+# needs the drive-letter form file:///C:/...)
+file_url() { case "${OSTYPE:-}" in msys*|cygwin*) printf 'file:///%s' "$(cygpath -m "$1")" ;; *) printf 'file://%s' "$1" ;; esac; }
 
 kit_cmd_count() { # settings file -> number of kit hook commands
   "$REAL_JQ" '[.. | objects | select(has("command")) | .command | select(contains("/.claude-kit/hooks/"))] | length' "$1"

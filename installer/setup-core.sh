@@ -64,6 +64,37 @@ kit_os() {
     *) printf 'linux' ;;
   esac
 }
+# jq_binary_mode: Git Bash on Windows runs a native jq.exe, which needs two adjustments; jq is
+# then a wrapper function. Re-run after jq is installed mid-run.
+#  - jq.exe writes CRLF line ends in text mode; the installer splits and compares LF text: -b.
+#  - MSYS rewrites every argument that looks like a POSIX path when it starts a native program, so
+#    `--arg p /c/work/.claude` reached jq as C:/work/.claude (and a multi-line list only had
+#    its first line rewritten). That rewriting is switched off for jq, and only the real file
+#    operands (and --slurpfile/--rawfile/--from-file files) are converted, with cygpath -m.
+jq_binary_mode() {
+  case "${OSTYPE:-}" in msys*|cygwin*) ;; *) return 0 ;; esac
+  unset -f jq
+  if command -v jq >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1 && command jq -b -n 1 >/dev/null 2>&1; then
+    jq() { jq_win "$@"; }
+  fi
+  return 0
+}
+jq_win() {
+  local a f=0 args=()
+  while [ $# -gt 0 ]; do
+    a="$1"; shift
+    case "$a" in
+      --arg|--argjson) args+=("$a" "$1" "$2"); shift 2 ;;
+      --slurpfile|--rawfile) args+=("$a" "$1" "$(jq_win_path "$2")"); shift 2 ;;
+      -f|--from-file) args+=("$a" "$(jq_win_path "$1")"); shift; f=1 ;;
+      -?*) args+=("$a") ;;
+      *) if [ "$f" = 0 ]; then args+=("$a"); f=1; else args+=("$(jq_win_path "$a")"); fi ;;   # the filter, then files
+    esac
+  done
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' command jq -b "${args[@]}"
+}
+jq_win_path() { case "$1" in /*) cygpath -m -- "$1" ;; *) printf '%s' "$1" ;; esac; }
+jq_binary_mode
 real_windows() { case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; esac; return 1; }
 # win_paths: backslash and drive-letter forms are path syntax only on Windows (elsewhere "\" is an
 # ordinary file-name character)
@@ -406,7 +437,7 @@ ensure_jq() {
     if ! command -v jq >/dev/null 2>&1 && [ -n "${LOCALAPPDATA:-}" ]; then
       PATH="$PATH:$(norm_path "$LOCALAPPDATA")/Microsoft/WinGet/Links"
     fi
-    command -v jq >/dev/null 2>&1 && return 0
+    command -v jq >/dev/null 2>&1 && { jq_binary_mode; return 0; }
     die "jq is still not available after: $cmd
   Install it manually, open a new terminal and run the installer again. Nothing was changed." 3
   fi
@@ -820,13 +851,15 @@ block_state() { # file -> none | ok | broken   (CRLF-insensitive)
   else echo broken; fi
 }
 
+# BINMODE=3 (gawk; other awks ignore it): Git Bash's gawk reads files in text mode and would drop
+# the CR of every CRLF line, so a CRLF CLAUDE.md would come back with LF endings.
 claude_md_new() { # real-file out   (keeps the file's line endings)
   local f="$1" out="$2" eol=""
   has_crlf "$f" && eol=crlf
   block_text $eol > "$WORK/block"
   case "$(block_state "$f")" in
     ok)
-      awk -v bf="$WORK/block" -v b="$BEGIN_MARK" -v e="$END_MARK" '
+      awk -v BINMODE=3 -v bf="$WORK/block" -v b="$BEGIN_MARK" -v e="$END_MARK" '
         BEGIN { while ((getline l < bf) > 0) blk = blk l "\n" }
         { l = $0; sub(/\r$/, "", l) }
         l == b && !done { printf "%s", blk; done = 1; skip = 1; next }
@@ -844,7 +877,7 @@ claude_md_new() { # real-file out   (keeps the file's line endings)
 }
 
 claude_md_strip() { # file out : remove the block and the blank line before it (CRLF-insensitive)
-  awk -v b="$BEGIN_MARK" -v e="$END_MARK" '
+  awk -v BINMODE=3 -v b="$BEGIN_MARK" -v e="$END_MARK" '
     { l = $0; sub(/\r$/, "", l) }
     l == b { if (have && pl != "") print prev; have = 0; skip = 1; next }
     skip { if (l == e) skip = 0; next }

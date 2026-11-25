@@ -70,9 +70,9 @@ new_home "pA home"; mkdir -p "$H/.claude" "$H/.claude-old"; printf '{}\n' > "$H/
 before_old=$(tree "$H/.claude-old")
 run_inst --all --yes
 mv "$H/.claude-old" "$H/.claude-old.away"
-XENV="CLAUDE_KIT_RELEASE_URL=file://$REL" run_cli update --dry-run
+XENV="CLAUDE_KIT_RELEASE_URL=$(file_url "$REL")" run_cli update --dry-run
 assert_eq "NEW-A update --dry-run with a missing profile: exit 0" 0 "$RC"
-XENV="CLAUDE_KIT_RELEASE_URL=file://$REL" run_cli update
+XENV="CLAUDE_KIT_RELEASE_URL=$(file_url "$REL")" run_cli update
 assert_eq "NEW-A update with a missing profile: exit 0" 0 "$RC"
 [ ! -e "$H/.claude-old" ] && pass "NEW-A update does not recreate the missing profile" || fail "NEW-A recreated" "exists"
 assert_has "NEW-A missing profile stays recorded" "$("$REAL_JQ" -r '.profiles | join(",")' "$KH/state/install.json")" "$H/.claude-old"

@@ -133,7 +133,7 @@ export CLAUDE_CONFIG_DIR="/opt/p 2"
 set -gx CLAUDE_CONFIG_DIR ~/.p3
   # CLAUDE_CONFIG_DIR=/nope
 EOF
-U=$(cd "$T" && env -i HOME="$T/u home" PATH="$JQ_PATH" CLAUDE_KIT_LIB_ONLY=1 "$BASH_BIN" -c '
+U=$(cd "$T" && env -i HOME="$T/u home" PATH="$JQ_PATH" ${MSYS:+MSYS="$MSYS"} CLAUDE_KIT_LIB_ONLY=1 "$BASH_BIN" -c '
   . "$1"
   for i in $CONFIG_ITEMS $HISTORY_ITEMS; do
     for n in $NEVER_SHARE; do [ "$i" = "$n" ] && echo "LEAK $i"; done
