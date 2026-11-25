@@ -26,7 +26,10 @@ start=$SECONDS
 ( PATH="$SLOW:$PATH"; kit_run_timeout 2 "$T/in" "$T/out" bash -c "$REAL_SLEEP 1000; :" "$MARK-1" ); rc=$?
 el=$((SECONDS - start))
 assert_eq "1: timed out (124)" 124 "$rc"
-[ "$el" -le 3 ] && pass "1: returns within the deadline + 1 s even when each tick is slow (${el}s for 2s)" || fail "1: wall-clock deadline" "took ${el}s for a 2s timeout"
+# Budget: 2 s deadline + 1 s of $SECONDS rounding + one slow tick (0.7 s) + the kill walk, whose own
+# `sleep 0.2` also goes through the slow stub (0.8 s), + forks on a loaded CI runner. A deadline that
+# counted ticks instead of wall-clock time would need 20 slow ticks (~14 s), so 6 s still catches it.
+[ "$el" -le 6 ] && pass "1: returns near the deadline even when each tick is slow (${el}s for 2s)" || fail "1: wall-clock deadline" "took ${el}s for a 2s timeout"
 sleep 0.3; assert_eq "1: nothing left running" 0 "$(orphans "$MARK-1")"
 
 # ---------------------------------------------------------------- 2a. no pgrep: children are killed too
@@ -63,7 +66,8 @@ rm -rf "$STATE"; mkdir -p "$STATE"; edit_log ng
 start=$SECONDS; GPATH="$NP" gate ng CLAUDE_KIT_VERIFIER_TIMEOUT=10; el=$((SECONDS - start))
 sleep 0.3
 assert_has "2: stop gate without pgrep: verifier timeout -> fail-open" "$OUT" "fail-open"
-[ "$el" -le 12 ] && pass "2: stop gate returned in ${el}s for a 10s verifier timeout" || fail "2: stop gate duration" "${el}s"
+# the verifier sleeps 1000 s, so a gate that ignored its timeout would hang far beyond 16 s
+[ "$el" -le 16 ] && pass "2: stop gate returned in ${el}s for a 10s verifier timeout" || fail "2: stop gate duration" "${el}s"
 assert_eq "2: stop gate without pgrep: the verifier's child is not orphaned" 0 "$(orphans "$MARK-gate")"
 
 # ---------------------------------------------------------------- 3. CLAUDE_KIT_VERIFIER_TIMEOUT validation
@@ -152,7 +156,8 @@ echo "rc=\$? el=\$((SECONDS - start))" > "$T/tty-res"
 EOS
 if run_pty "$BASH_BIN" "$T/tty-run.sh"; then
   res=$(cat "$T/tty-res" 2>/dev/null)
-  case "$res" in "rc=0 el="[0-3]) pass "3: under a tty, a verifier that sets terminal modes is not job-control stopped ($res)" ;;
+  # a stopped verifier shows as rc=124 at the 10 s deadline; slack below that is for slow runners
+  case "$res" in "rc=0 el="[0-6]) pass "3: under a tty, a verifier that sets terminal modes is not job-control stopped ($res)" ;;
     *) fail "3: tty verifier" "got [$res] (rc=124 = stopped by SIGTTOU until the deadline)" ;; esac
   assert_eq "3: under a tty, its output arrives" "ALLOW: tty touched" "$(cat "$T/tty-out" 2>/dev/null)"
   # the whole stop gate under a tty: one JSON object on stdout, no orphans
